@@ -1,5 +1,10 @@
 <?php
 /*
+V3 Rehash of old osc addon - revised by @BrockleyJohn
+- make origin zip a local setting in case not set globally
+- phoenix-style abstraction of common methods
+- separate list of services 
+- dynamic lists via functions for config settings to avoid further uninstall/reinstall
 
 USPS Rate V4 Intl Rate V2
   $Mod: Changed from Parcel Post to Standard Post 20130129 Kymation $
@@ -14,89 +19,151 @@ Copyright (c) 2012 osCbyJetta
 Released under the GNU General Public License
 */
 
-  class usps {
-    var $code, $title, $description, $icon, $enabled, $usps_weight, $xml_errors;
+$classdir = dirname(dirname(__DIR__)) . '/classes/';
+require_once $classdir . 'cartmart_shipping_234_abstract.php';
+require_once $classdir . 'cartmart_234_compatibility.php';
+
+  class usps extends cartmart_shipping_234_abstract {
+
+    use cartmart_234_compatibility;
+
+    var $usps_weight, $xml_errors;
     // The server URL and DLL are here in case they ever need to be changed
     var $usps_server = 'production.shippingapis.com';
     var $api_page = '/shippingapi.dll';
 
-    const LOG_API = true;
+    const CONFIG_KEY_BASE = 'MODULE_SHIPPING_USPS_';
 
     const SERVICES_LIST = [
-    'First-Class MailRM Stamped Letter',
-    'First-Class MailRM Large Envelope',
-    //'First-Class Package Service - RetailTM',
-    'First-Class Package Service - RetailRM',
-    'Media Mail Parcel',
-    'Library Mail Parcel',
-    'USPS Retail GroundRM',
-    'Priority MailRM',
-    'Priority MailRM Flat Rate Envelope',
-    'Priority MailRM Legal Flat Rate Envelope',
-    'Priority MailRM Padded Flat Rate Envelope',
-    'Priority MailRM Small Flat Rate Box',
-    'Priority MailRM Medium Flat Rate Box',
-    'Priority MailRM Large Flat Rate Box',
-    'Priority MailRM Regional Rate Box A',
-    'Priority MailRM Regional Rate Box B',
-    'Priority Mail ExpressRM',
-    'Priority Mail ExpressRM Flat Rate Envelope',
-    'Priority Mail ExpressRM Legal Flat Rate Envelope',
-    'First-Class MailRM International Letter',
-    'First-Class MailRM International Large Envelope',
-    'First-Class Package International ServiceTM',
-    'Priority Mail InternationalRM',
-    'Priority Mail InternationalRM Flat Rate Envelope',
-    'Priority Mail InternationalRM Small Flat Rate Box',
-    'Priority Mail InternationalRM Medium Flat Rate Box',
-    'Priority Mail InternationalRM Large Flat Rate Box',
-    'Priority Mail Express InternationalRM',
-    'Priority Mail Express InternationalRM Flat Rate Envelope',
-    'USPS GXGTM Envelopes',
-    'Global Express GuaranteedRM (GXG)',
-    'USPS Ground AdvantageRM'
-    //'USPS Ground AdvantageTM'
-  ];
+      'First-Class MailRM Stamped Letter',
+      'First-Class MailRM Large Envelope',
+      //'First-Class Package Service - RetailTM',
+      'First-Class Package Service - RetailRM',
+      'Media Mail Parcel',
+      'Library Mail Parcel',
+      'USPS Retail GroundRM',
+      'Priority MailRM',
+      'Priority MailRM Flat Rate Envelope',
+      'Priority MailRM Legal Flat Rate Envelope',
+      'Priority MailRM Padded Flat Rate Envelope',
+      'Priority MailRM Small Flat Rate Box',
+      'Priority MailRM Medium Flat Rate Box',
+      'Priority MailRM Large Flat Rate Box',
+      'Priority MailRM Regional Rate Box A',
+      'Priority MailRM Regional Rate Box B',
+      'Priority Mail ExpressRM',
+      'Priority Mail ExpressRM Flat Rate Envelope',
+      'Priority Mail ExpressRM Legal Flat Rate Envelope',
+      'First-Class MailRM International Letter',
+      'First-Class MailRM International Large Envelope',
+      'First-Class Package International ServiceTM',
+      'Priority Mail InternationalRM',
+      'Priority Mail InternationalRM Flat Rate Envelope',
+      'Priority Mail InternationalRM Small Flat Rate Box',
+      'Priority Mail InternationalRM Medium Flat Rate Box',
+      'Priority Mail InternationalRM Large Flat Rate Box',
+      'Priority Mail Express InternationalRM',
+      'Priority Mail Express InternationalRM Flat Rate Envelope',
+      'USPS GXGTM Envelopes',
+      'Global Express GuaranteedRM (GXG)',
+      'USPS Ground AdvantageRM'
+      //'USPS Ground AdvantageTM'
+    ];
 
-  public static function getServicesList() {
-    return preg_replace( '/\s+/', ' ', self::SERVICES_LIST );
-  }
+    const EXTRAS_DOM_LIST = [
+      'Certified MailRM', 
+      'Insurance', 
+      'Adult Signature Restricted Delivery', 
+      'Registered without Insurance', 
+      'Registered MailRM', 
+      'Collect on Delivery', 
+      'Return Receipt for Merchandise', 
+      'Return Receipt', 
+      'Certificate of Mailing', 
+      'Express Mail Insurance', 
+      'Delivery ConfirmationRM', 
+      'Signature ConfirmationRM', 
+    ];
 
-  function __construct() {
-      global $order;
+    const EXTRAS_INTL_LIST = [
+      'Registered Mail', 
+      'Insurance', 
+      'Return Receipt', 
+      'Restricted Delivery', 
+      'Pick-Up', 
+      'Certificate of Mailing'
+    ];
 
-      $this->code = 'usps';
-      $this->title = MODULE_SHIPPING_USPS_TEXT_TITLE;
-      $this->description = MODULE_SHIPPING_USPS_TEXT_DESCRIPTION;
-      $this->sort_order = MODULE_SHIPPING_USPS_SORT_ORDER;
-      $this->icon = (defined('DIR_WS_ICONS') ? DIR_WS_ICONS : 'images/icons/') . 'shipping_usps.gif';
-      $this->tax_class = MODULE_SHIPPING_USPS_TAX_CLASS;
-      $this->enabled = ((MODULE_SHIPPING_USPS_STATUS == 'True') ? true : false);
+    public static function debug_log() {
+      return 'True' == self::get_constant('DEBUG_LOG');
+    }
 
-      if ($this->enabled == true && (int) MODULE_SHIPPING_USPS_ZONE > 0) {
-        $check_flag = false;
-        $check_query = tep_db_query("select zone_id from " . TABLE_ZONES_TO_GEO_ZONES . " where geo_zone_id = '" . MODULE_SHIPPING_USPS_ZONE . "' and zone_country_id = '" . $order->delivery['country']['id'] . "' order by zone_id");
-        while ($check = tep_db_fetch_array($check_query)) {
-          if ($check['zone_id'] < 1)
-            $check_flag = true;
-          elseif ($check['zone_id'] == $order->delivery['zone_id']) $check_flag = true;
-        }
-        if ($check_flag == false)
-          $this->enabled = false;
+    public static function getExtrasList() {
+      return preg_replace( '/\s+/', ' ', self::EXTRAS_LIST );
+    }
+
+    public static function getServicesList() {
+      return preg_replace( '/\s+/', ' ', self::SERVICES_LIST );
+    }
+
+    public static function extrasIntialize($which) {
+      $return = [];
+      $array = self::extrasList($which);
+      foreach ($array as $val) {
+        $return[] = $val;
+        $return[] = 'N';
+      }
+      return $return;
+    }
+
+    public static function extrasList($which) {
+      switch ($which) {
+        case 'dom':
+          return self::EXTRAS_DOM_LIST;
+        case 'intl':
+          return self::EXTRAS_INTL_LIST;
+        default:
+          return [];
+      }
+    }
+
+    function __construct() {
+
+      error_log('instantiating usps'); 
+
+      if ( defined('MODULE_SHIPPING_USPS_SERVER') && trim(MODULE_SHIPPING_USPS_SERVER) != '' ) { // server override?
+        $this->usps_server = trim(MODULE_SHIPPING_USPS_SERVER);
       }
 
-      if ( MODULE_SHIPPING_USPS_SERVER != '' ) {
-        $this->usps_server = MODULE_SHIPPING_USPS_SERVER;
+      parent::__construct();
+      $this->update_status();
+
+      if (self::installed() && basename($GLOBALS['PHP_SELF']) == 'modules.php') {
+        if ($this->base_constant('USERID') == '' || $this->base_constant('ORIGIN') == '') {
+          $this->description .= '<div class="secWarning">Module will not display unless USPS userid and Origin Zip are set</div>';
+        }
+        if ($this->base_constant('SERVER') == 'production' || $this->base_constant('SERVER') == 'test') {
+          tep_db_query('DELETE FROM configuration WHERE configuration_key = "MODULE_SHIPPING_USPS_SERVER"');
+          $this->install(static::CONFIG_KEY_BASE . 'SERVER');
+        }
       }
     }
 
     function quote($method = '') {
       global $order, $shipping_num_boxes, $currencies, $shipping, $shipping_weight, $total_weight;
-      error_log("usps entering quote with no boxes '$shipping_num_boxes' ship weight '$shipping_weight' total weight '$total_weight'");
+      if (self::debug_log()) error_log("usps entering quote with no boxes '$shipping_num_boxes' ship weight '$shipping_weight' total weight '$total_weight'");
       $iInfo = '';
       $methods = array ();
       $usps_weight = $shipping_num_boxes > 0 ? (float)$total_weight / $shipping_num_boxes : $total_weight;
-	  if(($usps_weight +SHIPPING_BOX_WEIGHT) > $usps_weight) $usps_weight = $usps_weight + SHIPPING_BOX_WEIGHT;
+	    if(($usps_weight +SHIPPING_BOX_WEIGHT) > $usps_weight) $usps_weight = $usps_weight + SHIPPING_BOX_WEIGHT;
+      switch($this->base_constant('CONVERSION')) {
+        case 'kg':
+          $usps_weight = $usps_weight * 2.20462;
+          break;
+        case 'g':
+          $usps_weight = $usps_weight * 0.00220462;
+          break;
+      }
       $this->usps_weight = ( (float)$usps_weight < 0.0625 ? 0.0625 : (float)$usps_weight );
       $this->pounds = (int) $this->usps_weight;
       $this->ounces = round(16 * ($this->usps_weight - $this->pounds), 3);
@@ -104,7 +171,7 @@ Released under the GNU General Public License
 
       //Get the quote from USPS
       $uspsQuote = $this->_getQuote();
-      if (self::LOG_API) {
+      if (self::debug_log()) {
         error_log('USPS RateV4Response: ' . print_r($uspsQuote, true));
       }
         if (isset ($uspsQuote['Number']))
@@ -396,7 +463,7 @@ Released under the GNU General Public License
           $request .= '<Package ID="' . $package_count . '">' .
             '<Service>' . $service . '</Service>' .
             $first_class_type .
-            '<ZipOrigination>' . SHIPPING_ORIGIN_ZIP . '</ZipOrigination>' .
+            '<ZipOrigination>' . $this->base_constant('ORIGIN') . '</ZipOrigination>' .
             '<ZipDestination>' . $ZipDestination . '</ZipDestination>' .
             '<Pounds>' . $this->pounds . '</Pounds>' .
             '<Ounces>' . $this->ounces . '</Ounces>' .
@@ -409,7 +476,7 @@ Released under the GNU General Public License
 
         $request .= '</RateV4Request>';
         //echo htmlentities($request) . '<br>' . "\n";
-        if (self::LOG_API) {
+        if (self::debug_log()) {
           error_log('USPS RateV4Request: ' . $request);
         }
   
@@ -435,7 +502,7 @@ Released under the GNU General Public License
         '<Length>4</Length>' .
         '<Height>2</Height>' .
         '<Girth>0</Girth>' .
-        '<OriginZip>' . SHIPPING_ORIGIN_ZIP . '</OriginZip>' .
+        '<OriginZip>' . $this->base_constant('ORIGIN') . '</OriginZip>' .
 
         // Changed N to Y to activate optional commercial base pricing for international services - 01/27/13 a.forever edit
         '<CommercialFlag>Y</CommercialFlag>' .
@@ -450,7 +517,7 @@ Released under the GNU General Public License
         '</Package>' .
         '</IntlRateV2Request>';
         //echo htmlentities($request) . '<br>' . "\n";
-        if (self::LOG_API) {
+        if (self::debug_log()) {
           error_log('USPS IntlRateV2Request: ' . $request);
         }
         $request = 'API=IntlRateV2&XML=' . urlencode($request);
@@ -524,55 +591,109 @@ Released under the GNU General Public License
       return $response_array;
     }
 
-    function install() {
-      tep_db_query("ALTER TABLE `configuration` CHANGE `configuration_value` `configuration_value` TEXT NOT NULL, CHANGE `set_function` `set_function` TEXT NULL DEFAULT NULL");
-      tep_db_query("update " . TABLE_CONFIGURATION . " SET configuration_value =  'true' where configuration_key = 'EMAIL_USE_HTML'");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Enable USPS Shipping', 'MODULE_SHIPPING_USPS_STATUS', 'True', 'Do you want to offer USPS shipping?', '6', '0', 'tep_cfg_select_option(array(\'True\', \'False\'), ', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, date_added) values ('Enter the USPS User ID', 'MODULE_SHIPPING_USPS_USERID', 'NONE', 'Enter the USPS USERID assigned to you.', '6', '0', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, use_function, set_function, date_added) values ('Tax Class', 'MODULE_SHIPPING_USPS_TAX_CLASS', '0', 'Use the following tax class on the shipping fee.', '6', '0', 'tep_get_tax_class_title', 'tep_cfg_pull_down_tax_classes(', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, use_function, set_function, date_added) values ('Shipping Zone', 'MODULE_SHIPPING_USPS_ZONE', '0', 'If a zone is selected, only enable this shipping method for that zone.', '6', '0', 'tep_get_zone_class_title', 'tep_cfg_pull_down_zone_classes(', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, date_added) values ('Sort Order', 'MODULE_SHIPPING_USPS_SORT_ORDER', '0', 'Sort order of display.', '6', '0', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Shipping Methods (Domestic and International)',  'MODULE_SHIPPING_USPS_TYPES', '0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00, 0, 70, 0.00', '<b><u>Checkbox:</u></b> Select the services to be offered<br><b><u>Minimum Weight (lbs)</u></b>first input field<br><b><u>Maximum Weight (lbs):</u></b>second input field<br><br>USPS returns methods based on cart weights.  These settings will allow further control (particularly helpful for flat rate methods) but will not override USPS limits', '6', '0', 'tep_cfg_usps_services(array(" . $this->get_usps_services_list() . "), ', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Extra Services (Domestic)', 'MODULE_SHIPPING_USPS_DMST_SERVICES', 'Certified MailRM, N, Insurance, N, Adult Signature Restricted Delivery, N, Registered without Insurance, N, Registered MailRM, N, Collect on Delivery, N, Return Receipt for Merchandise, N, Return Receipt, N, Certificate of Mailing, N, Express Mail Insurance, N, Delivery ConfirmationRM, N, Signature ConfirmationRM, N', 'Included in postage rates.  Not shown to the customer.', '6', '0', 'tep_cfg_usps_extraservices(array(\'Certified MailRM\', \'Insurance\', \'Adult Signature Restricted Delivery\', \'Registered without Insurance\', \'Registered MailRM\', \'Collect on Delivery\', \'Return Receipt for Merchandise\', \'Return Receipt\', \'Certificate of Mailing\', \'Express Mail Insurance\', \'Delivery ConfirmationRM\', \'Signature ConfirmationRM\'), ', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Extra Services (International)', 'MODULE_SHIPPING_USPS_INTL_SERVICES', 'Registered Mail, N, Insurance, N, Return Receipt, N, Restricted Delivery, N, Pick-Up, N, Certificate of Mailing, N', 'Included in postage rates.  Not shown to the customer.', '6', '0', 'tep_cfg_usps_extraservices(array(\'Registered Mail\', \'Insurance\', \'Return Receipt\', \'Restricted Delivery\', \'Pick-Up\', \'Certificate of Mailing\'), ', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Retail pricing or Online pricing?', 'MODULE_SHIPPING_USPS_RATE_TYPE', 'Retail', 'Rates will be returned ONLY for methods available in this pricing type.  Applies to prices <u>and</u> add on services', '6', '0', 'tep_cfg_select_option(array(\'Retail\', \'Online\'), ', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Rates Sort Order:', 'MODULE_SHIPPING_USPS_RATE_SORTER', 'Ascending', 'Ascending: Low to High<br>Descending: High to Low', '6', '0', 'tep_cfg_select_option(array(\'Ascending\', \'Descending\'), ', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Show International Regulations:', 'MODULE_SHIPPING_USPS_REGULATIONS', 'True', 'Displays international regulations and customs information.', '6', '0', 'tep_cfg_select_option(array(\'True\', \'False\'), ', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Show Weights', 'MODULE_SHIPPING_USPS_WEIGHTS', 'True', 'Displays the package weight on the quotes.', '6', '0', 'tep_cfg_select_option(array(\'True\', \'False\'), ', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, date_added) values ('USPS Server', 'MODULE_SHIPPING_USPS_SERVER', '', 'The USPS server to send the request to. <b>Change this only if instructed to do so!</b>', '6', '0', now())");
-      tep_db_query("insert into " . TABLE_CONFIGURATION . " (configuration_title, configuration_key, configuration_value, configuration_description, configuration_group_id, sort_order, set_function, date_added) values ('Send Debug Email', 'MODULE_SHIPPING_USPS_DEBUG', 'False', 'Send an email to the store owner with the USPS request and response.', '6', '0', 'tep_cfg_select_option(array(\'True\', \'False\'), ', now())");
-    }
-
-    function keys() {
-      return array (
-        'MODULE_SHIPPING_USPS_STATUS',
-        'MODULE_SHIPPING_USPS_USERID',
-        'MODULE_SHIPPING_USPS_TAX_CLASS',
-        'MODULE_SHIPPING_USPS_ZONE',
-        'MODULE_SHIPPING_USPS_SORT_ORDER',
-        'MODULE_SHIPPING_USPS_TYPES',
-        'MODULE_SHIPPING_USPS_DMST_SERVICES',
-        'MODULE_SHIPPING_USPS_INTL_SERVICES',
-        'MODULE_SHIPPING_USPS_RATE_TYPE',
-        'MODULE_SHIPPING_USPS_RATE_SORTER',
-        'MODULE_SHIPPING_USPS_REGULATIONS',
-        'MODULE_SHIPPING_USPS_WEIGHTS',
-        'MODULE_SHIPPING_USPS_SERVER',
-        'MODULE_SHIPPING_USPS_DEBUG'
-      );
-    }
-
-    function remove() {
-      tep_db_query("delete from " . TABLE_CONFIGURATION . " where configuration_key in ('" . implode("', '", $this->keys()) . "')");
-    }
-
-    function check() {
-      if (!isset ($this->_check)) {
-        $check_query = tep_db_query("select configuration_value from " . TABLE_CONFIGURATION . " where configuration_key = 'MODULE_SHIPPING_USPS_STATUS'");
-        $this->_check = tep_db_num_rows($check_query);
-      }
-
-      return $this->_check;
+    protected function get_parameters() {
+      return [
+        static::CONFIG_KEY_BASE . 'STATUS' => [
+          'title' => 'Enable USPS Shipping',
+          'desc' => 'Do you want to offer USPS shipping?',
+          'value' => 'True',
+          'set_func' => "Config::select_one(['True', 'False'], ",
+        ],
+        static::CONFIG_KEY_BASE . 'USERID' => [
+          'title' => 'USPS User ID',
+          'desc' => 'Enter the USPS USERID assigned to you.',
+          'value' => '',
+        ],
+        static::CONFIG_KEY_BASE . 'ORIGIN' => [
+          'title' => 'Origin Postcode',
+          'desc' => 'Enter the zipcode from which your parcels are sent.',
+          'value' => defined('SHIPPING_ORIGIN_ZIP') ? SHIPPING_ORIGIN_ZIP : '',
+        ],
+        static::CONFIG_KEY_BASE . 'TAX_CLASS' => [
+          'title' => 'Tax Class',
+          'desc' => 'Use the following tax class on the shipping fee.',
+          'value' => '0',
+          'use_func' => 'tep_get_tax_class_title',
+          'set_func' => "tep_cfg_pull_down_tax_classes(', ",
+        ],
+        static::CONFIG_KEY_BASE . 'ZONE' => [
+          'title' => 'Shipping Zone',
+          'desc' => 'If a zone is selected, only enable this shipping method for that zone.',
+          'value' => '0',
+          'use_func' => 'geo_zone::fetch_name',
+          'set_func' => 'Config::select_geo_zone(',
+        ],
+        static::CONFIG_KEY_BASE . 'SORT_ORDER' => [
+          'title' => 'Sort Order',
+          'desc' => 'Sort order of display. Lowest is displayed first.',
+          'value' => '0',
+        ],
+        static::CONFIG_KEY_BASE . 'TYPES' => [
+          'title' => 'Shipping Methods (Domestic and International)',
+          'desc' => '<b><u>Checkbox:</u></b> Select the services to be offered<br><b><u>Minimum Weight (lbs)</u></b>first input field<br><b><u>Maximum Weight (lbs):</u></b>second input field<br><br>USPS returns methods based on cart weights.  These settings will allow further control (particularly helpful for flat rate methods) but will not override USPS limits',
+          'value' => 'Daily Pickup',
+          'set_func' => "tep_cfg_usps_services(array('" . $this->get_usps_services_list() . "'), ",
+        ],
+        static::CONFIG_KEY_BASE . 'DMST_SERVICES' => [
+          'title' => 'Extra Services (Domestic)',
+          'desc' => 'Included in postage rates.  Not shown to the customer.',
+          'value' => self::extrasIntialize('dom'),
+          'set_func' => "tep_cfg_usps_extraservices(usps::extrasList('dom'), ",
+        ],
+        static::CONFIG_KEY_BASE . 'INTL_SERVICES' => [
+          'title' => 'Extra Services (International)',
+          'desc' => 'Included in postage rates.  Not shown to the customer.',
+          'value' => self::extrasIntialize('intl'),
+          'set_func' => "tep_cfg_usps_extraservices(usps::extrasList('intl'), ",
+        ],
+        static::CONFIG_KEY_BASE . 'RATE_TYPE' => [
+          'title' => 'Retail pricing or Online pricing?',
+          'desc' => 'Rates will be returned ONLY for methods available in this pricing type.  Applies to prices <u>and</u> add on services',
+          'value' => '',
+          'set_func' => "Config::select_one(['Retail', 'Online'], ",
+        ],
+        static::CONFIG_KEY_BASE . 'RATE_SORTER' => [
+          'title' => 'Rates Sort Order:',
+          'desc' => 'Ascending: Low to High<br>Descending: High to Low',
+          'value' => 'Ascending',
+          'set_func' => "Config::select_one(['Ascending', 'Descending'], ",
+        ],
+        static::CONFIG_KEY_BASE . 'REGULATIONS' => [
+          'title' => 'Show International Regulations:',
+          'desc' => 'Displays international regulations and customs information.',
+          'value' => 'False',
+          'set_func' => "Config::select_one(['True', 'False'], ",
+        ],
+        static::CONFIG_KEY_BASE . 'WEIGHTS' => [
+          'title' => 'Show Weights',
+          'desc' => 'Displays the package weight on the quotes.',
+          'value' => 'True',
+          'set_func' => "Config::select_one(['True', 'False'], ",
+        ],
+        static::CONFIG_KEY_BASE . 'CONVERSION' => [
+          'title' => 'Unit Conversion',
+          'desc' => 'Do your weights require conversion to imperial? If so, select the metric unit you have used',
+          'value' => 'None',
+          'set_func' => "Config::select_one(['None', 'kg', 'g'], ",
+        ],
+        static::CONFIG_KEY_BASE . 'SERVER' => [
+          'title' => 'USPS Server',
+          'desc' => 'The USPS server to send the request to. <b>Change this only if instructed to do so!</b>',
+          'value' => '',
+        ],
+        static::CONFIG_KEY_BASE . 'DEBUG' => [
+          'title' => 'Send Debug Email',
+          'desc' => 'Send an email to the store owner with the USPS request and response.',
+          'value' => 'False',
+          'set_func' => "Config::select_one(['True', 'False'], ",
+        ],
+        static::CONFIG_KEY_BASE . 'DEBUG_LOG' => [
+          'title' => 'Debug Logging',
+          'desc' => 'Write details of the request, response and calculations to the system log. Do not leave turned on!',
+          'value' => 'False',
+          'set_func' => "Config::select_one(['True', 'False'], ",
+        ],
+      ];
     }
 
     function get_delivery_days( $delivery_array, $service ) {
@@ -806,6 +927,7 @@ Released under the GNU General Public License
       $name = (($key) ? 'configuration[' . $key . '][]' : 'configuration_value');
       $string = '<b><div style="width:20px;float:left;text-align:center;">&nbsp;</div><div style="width:30px;float:left;text-align:center;">Min</div><div style="width:30px;float:left;text-align:center;">Max</div><div style="float:left;"></div><div style="width:55px;float:right;text-align:center;">Handling</div></b><div style="clear:both;"></div>';
       for ($i = 0; $i < sizeof($select_array); $i++) {
+        // error_log("setting " . $select_array[$i] . " to " . $key_values[($i * 4)]);
         $string .= '<div id="' . $key . $i . '">';
         $string .= '<div style="width:20px;float:left;text-align:center;">' . tep_draw_checkbox_field($name, $select_array[$i], (in_array($select_array[$i], $key_values) ? 'CHECKED' : '')) . '</div>';
         if (in_array($select_array[$i], $key_values))
@@ -851,6 +973,8 @@ Released under the GNU General Public License
       }
       return $string;
     }
+  } else {
+    error_log('**** function tep_cfg_usps_services already exists ****');
   }
 
   if( !function_exists( 'tep_cfg_usps_extraservices' ) ) {
@@ -883,6 +1007,8 @@ Released under the GNU General Public License
       }
       return $string;
     }
+  } else {
+    error_log('**** function tep_cfg_usps_extraservices already exists ****');
   }
 
 ?>
